@@ -1,0 +1,13 @@
+[package]
+name = "nlc"
+version = "0.1.0"
+edition = "2024"
+description = "Command-line Markdown AST dumper, built on nlc-parser."
+
+[[bin]]
+name = "nlc"
+path = "src/main.rs"
+
+[dependencies]
+nlc-parser = { path = "../nlc-parser", version = "0.1.0" }
+sha2 = "0.10"

@@ -1,0 +1,3 @@
+[workspace]
+members = ["nlc-parser", "nlc"]
+resolver = "2"

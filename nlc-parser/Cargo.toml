@@ -1,0 +1,13 @@
+[package]
+name = "nlc-parser"
+version = "0.1.0"
+edition = "2024"
+description = "A Markdown parser (with [[...]] cross-file references) built with LALRPOP."
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+lalrpop-util = "0.22"
+
+[build-dependencies]
+lalrpop = "0.22"
