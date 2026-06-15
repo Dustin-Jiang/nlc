@@ -1,0 +1,87 @@
+// Block-level grammar. Consumes the flat token stream produced by
+// `block::lexer` (which uses explicit Open/Close markers for containers) and
+// builds the nested `Document` AST. Inline content is parsed via `inline`.
+
+use crate::ast::{Block, Document, ListItem, Reference};
+use crate::block::token::{CodeData, HeadingData, ItemData, ListData, RefData, Token};
+use crate::inline;
+use crate::Part;
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = String;
+
+    enum Token {
+        "para"     => Token::Paragraph(<String>),
+        "h"        => Token::Heading(<HeadingData>),
+        "code"     => Token::CodeBlock(<CodeData>),
+        "hr"       => Token::ThematicBreak,
+        "html"     => Token::HtmlBlock(<String>),
+        "refdef"   => Token::ReferenceDef(<RefData>),
+        "bqo"      => Token::BlockquoteOpen,
+        "bqc"      => Token::BlockquoteClose,
+        "lo"       => Token::ListOpen(<ListData>),
+        "lc"       => Token::ListClose(<bool>),
+        "io"       => Token::ItemOpen(<ItemData>),
+        "ic"       => Token::ItemClose,
+        "eof"      => Token::Eof,
+    }
+}
+
+pub Doc: Document = {
+    <parts:Part*> "eof" => {
+        let mut doc = Document::new(Vec::new());
+        for p in parts {
+            match p {
+                Part::Block(b) => doc.blocks.push(b),
+                Part::Ref(r) => doc.references.push(r),
+            }
+        }
+        doc
+    },
+};
+
+Part: Part = {
+    <b:Block> => Part::Block(b),
+    <r:"refdef"> => Part::Ref(Reference {
+        label: r.label,
+        destination: r.destination,
+        title: r.title,
+    }),
+};
+
+Block: Block = {
+    <s:"para"> => Block::Paragraph(inline::parse(&s)),
+
+    <hd:"h"> => Block::Heading {
+        level: hd.level,
+        inlines: inline::parse(&hd.text),
+    },
+
+    <cd:"code"> => Block::CodeBlock {
+        info: cd.info,
+        code: cd.code,
+    },
+
+    "hr" => Block::ThematicBreak,
+
+    <s:"html"> => Block::HtmlBlock(s),
+
+    "bqo" <blocks:Block*> "bqc" => Block::BlockQuote(blocks),
+
+    <ld:"lo"> <items:ListItem*> <tight:"lc"> => Block::List {
+        items,
+        ordered: ld.ordered,
+        start: ld.start,
+        tight,
+    },
+};
+
+ListItem: ListItem = {
+    <id:"io"> <blocks:Block*> "ic" => ListItem {
+        blocks,
+        task: id.task,
+    },
+};

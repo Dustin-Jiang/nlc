@@ -1,0 +1,51 @@
+// Inline-level grammar. Consumes the balanced token stream produced by
+// `inline::lexer` (emphasis/strong already paired up) and rebuilds the
+// `Vec<Inline>` tree.
+
+use crate::ast::Inline;
+use crate::inline::token::{FileRefData, ImageData, LinkData, Token};
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = String;
+
+    enum Token {
+        "text"     => Token::Text(<String>),
+        "code"     => Token::Code(<String>),
+        "link"     => Token::Link(<LinkData>),
+        "image"    => Token::Image(<ImageData>),
+        "fref"     => Token::FileRef(<FileRefData>),
+        "autolink" => Token::Autolink(<String>),
+        "html"     => Token::RawHtml(<String>),
+        "br"       => Token::HardBreak,
+        "sbreak"   => Token::SoftBreak,
+        "eo"       => Token::EmphOpen,
+        "ec"       => Token::EmphClose,
+        "so"       => Token::StrongOpen,
+        "sc"       => Token::StrongClose,
+    }
+}
+
+pub Inlines: Vec<Inline> = {
+    <items:Inline*> => items,
+};
+
+Inline: Inline = {
+    <s:"text"> => Inline::Text(s),
+    <s:"code"> => Inline::Code(s),
+    "br" => Inline::HardBreak,
+    "sbreak" => Inline::SoftBreak,
+    <s:"autolink"> => Inline::Autolink(s),
+    <s:"html"> => Inline::RawHtml(s),
+    <d:"link"> => crate::inline::link_to_inline(d),
+    <d:"image"> => crate::inline::image_to_inline(d),
+    <d:"fref"> => Inline::FileRef(crate::ast::FileRef {
+        path: d.path,
+        target: d.target,
+        alias: d.alias,
+    }),
+    "eo" <inner:Inline*> "ec" => Inline::Emphasis(inner),
+    "so" <inner:Inline*> "sc" => Inline::Strong(inner),
+};
