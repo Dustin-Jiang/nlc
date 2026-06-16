@@ -184,6 +184,20 @@ impl World {
         self.files.get(rel_path)
     }
 
+    /// Look up a file by a user-supplied path. The path is normalized
+    /// (backslashes → forward slashes, leading `./` and redundant separators
+    /// dropped) so that `./配置管理计划.md`, `.\\docs\\x.md`, and `docs/x.md`
+    /// all match the workspace-relative key `docs/x.md`. Returns the actual
+    /// stored key alongside the node, since callers (e.g. `tree`) need the
+    /// canonical path to build matching [`NodeId`]s.
+    pub fn find_file(&self, user_path: &str) -> Option<(&str, &FileNode)> {
+        let norm = normalize_user_path(user_path);
+        self.files
+            .get_key_value(&norm)
+            .map(|(k, v)| (k.as_str(), v))
+            .or_else(|| self.files.get_key_value(user_path).map(|(k, v)| (k.as_str(), v)))
+    }
+
     /// Total number of sections across all files.
     pub fn section_count(&self) -> usize {
         self.files
@@ -196,5 +210,59 @@ impl World {
     /// (file order, then pre-order within each file).
     pub fn nodes(&self) -> Vec<(NodeId, NodeRef<'_>)> {
         self.files.values().flat_map(|f| f.nodes()).collect()
+    }
+}
+
+/// Normalize a user-supplied relative path to match workspace file keys:
+/// backslashes become forward slashes, and `.` / empty components are dropped.
+/// So `./a.md` → `a.md`, `docs/./x.md` → `docs/x.md`, `docs\\y.md` → `docs/y.md`.
+pub fn normalize_user_path(s: &str) -> String {
+    s.replace('\\', "/")
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_strips_leading_dot_slash() {
+        assert_eq!(normalize_user_path("./a.md"), "a.md");
+        assert_eq!(normalize_user_path("./docs/x.md"), "docs/x.md");
+    }
+
+    #[test]
+    fn normalize_strips_redundant_components() {
+        assert_eq!(normalize_user_path("docs/./x.md"), "docs/x.md");
+        assert_eq!(normalize_user_path("docs//x.md"), "docs/x.md");
+        assert_eq!(normalize_user_path("././a.md"), "a.md");
+    }
+
+    #[test]
+    fn normalize_handles_backslashes_and_unicode() {
+        assert_eq!(normalize_user_path(".\\docs\\x.md"), "docs/x.md");
+        assert_eq!(normalize_user_path("./配置管理计划.md"), "配置管理计划.md");
+    }
+
+    #[test]
+    fn find_file_normalizes_user_input() {
+        let mut w = World::default();
+        let doc = nlc_parser::parse("# A\n").unwrap();
+        w.files.insert(
+            "配置管理计划.md".to_string(),
+            FileNode {
+                path: "配置管理计划.md".to_string(),
+                preamble: doc.blocks,
+                sections: Vec::new(),
+                line_count: 1,
+            },
+        );
+        assert!(w.find_file("./配置管理计划.md").is_some());
+        assert!(w.find_file("配置管理计划.md").is_some());
+        assert!(w.find_file(".\\配置管理计划.md").is_some());
+        assert!(w.find_file("missing.md").is_none());
     }
 }

@@ -19,12 +19,12 @@ pub struct TreePrinter {
 
 impl Printer for TreePrinter {
     fn print(&self, s: &Snapshot, out: &mut String) -> i32 {
-        let Some(f) = s.world.file(&self.file) else {
+        let Some((path, f)) = s.world.find_file(&self.file) else {
             let _ = writeln!(out, "nlc: no such file `{}`", self.file);
             return 2;
         };
 
-        let _ = writeln!(out, "{}", self.file);
+        let _ = writeln!(out, "{}", path);
 
         // Collect the file root's top-level "children": its own forward
         // dependencies (from the preamble) followed by its top-level sections.
@@ -43,7 +43,7 @@ impl Printer for TreePrinter {
             let _ = writeln!(out, "└── (no sections, no dependencies)");
         }
 
-        let ctx = Ctx { snap: s, file: &self.file };
+        let ctx = Ctx { snap: s, file: path };
         let mut visited = HashSet::new();
         visited.insert(root_id);
         print_children(&children, "", &ctx, &mut visited, out);

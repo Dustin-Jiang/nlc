@@ -13,13 +13,13 @@ pub struct ListPrinter {
 impl Printer for ListPrinter {
     fn print(&self, s: &Snapshot, out: &mut String) -> i32 {
         let target_files: Vec<String> = match &self.file {
-            Some(one) => {
-                if !s.world.files.contains_key(one) {
+            Some(one) => match s.world.find_file(one) {
+                Some((path, _)) => vec![path.to_string()],
+                None => {
                     line(out, &format!("nlc: no such file `{one}`"));
                     return 2;
                 }
-                vec![one.clone()]
-            }
+            },
             None => s.world.files.keys().cloned().collect(),
         };
 
