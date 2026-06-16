@@ -8,10 +8,10 @@
 /// the dispatcher in `main` can construct the matching printer directly.
 #[derive(Debug)]
 pub enum Command {
-    /// Analyze + report AND persist the `.nlc-cache` (default).
-    Check { full: bool },
-    /// Read-only analyze + report.
+    /// Read-only analyze + report (the default when no subcommand is given).
     Status { full: bool },
+    /// Analyze + report AND persist the `.nlc-cache`.
+    Check { full: bool },
     /// Print the section tree of one file, or every file when none is given.
     List { file: Option<String> },
     /// Print all resolved reference edges.
@@ -28,9 +28,9 @@ const HELP: &str = "\
 nlc — incremental markdown dependency linter
 
 USAGE:
-    nlc                       Run `check` in the current directory.
-    nlc check [--full]        Scan, validate, report, AND write .nlc-cache.
-    nlc status [--full]       Like `check` but does NOT write the cache.
+    nlc                       Read-only status report (default).
+    nlc status [--full]       Same as default; never writes the cache.
+    nlc check [--full]        Status report AND persist .nlc-cache.
     nlc list [<file>]         Print the section tree.
     nlc graph                 Print all cross-file reference edges.
     nlc clean                 Remove the .nlc-cache file.
@@ -52,7 +52,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String>
     let mut it = args.into_iter();
     let _program = it.next();
     let Some(sub) = it.next() else {
-        return Ok(Command::Check { full: false });
+        return Ok(Command::Status { full: false });
     };
     match sub.as_str() {
         "-h" | "--help" | "help" => Ok(Command::Help),
@@ -120,8 +120,8 @@ mod tests {
     }
 
     #[test]
-    fn no_args_is_check() {
-        assert!(matches!(parse(args(&[])), Ok(Command::Check { full: false })));
+    fn no_args_is_status() {
+        assert!(matches!(parse(args(&[])), Ok(Command::Status { full: false })));
     }
 
     #[test]
