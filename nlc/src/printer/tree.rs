@@ -94,9 +94,7 @@ fn print_children(children: &[Child<'_>], prefix: &str, ctx: &Ctx<'_>, visited: 
                 for sub in &section.children {
                     subs.push(Child::Section(sub));
                 }
-                if subs.is_empty() {
-                    let _ = writeln!(out, "{child_prefix}└── (no dependencies)");
-                } else {
+                if !subs.is_empty() {
                     print_children(&subs, &child_prefix, ctx, visited, out);
                 }
             }
@@ -122,9 +120,7 @@ fn print_children(children: &[Child<'_>], prefix: &str, ctx: &Ctx<'_>, visited: 
                                     raw: e.raw.clone(),
                                 })
                                 .collect();
-                            if target_deps.is_empty() {
-                                let _ = writeln!(out, "{child_prefix}└── (leaf)");
-                            } else {
+                            if !target_deps.is_empty() {
                                 print_children(&target_deps, &child_prefix, ctx, visited, out);
                             }
                         }
@@ -178,6 +174,8 @@ mod tests {
         assert!(out.contains("Guide"), "{out}");
         assert!(out.contains("Setup"), "{out}");
         assert!(out.contains("→ api.md::api/install"), "{out}");
+        assert!(!out.contains("(leaf)"), "{out}");
+        assert!(!out.contains("(no dependencies)"), "{out}");
     }
 
     #[test]
