@@ -285,11 +285,11 @@ mod tests {
 
         let b_before = before
             .iter()
-            .find(|(id, _)| id.as_str().ends_with("a/b"))
+            .find(|(id, _)| id.as_str().ends_with("a::b"))
             .unwrap();
         let b_after = after
             .iter()
-            .find(|(id, _)| id.as_str().ends_with("a/b"))
+            .find(|(id, _)| id.as_str().ends_with("a::b"))
             .unwrap();
         assert_ne!(b_before.1, b_after.1);
     }

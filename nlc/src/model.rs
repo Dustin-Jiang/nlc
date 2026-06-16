@@ -23,8 +23,10 @@ use nlc_parser::ast::{Block, Inline};
 ///
 /// The canonical string form is:
 ///  * the file's relative path for a *file root* (e.g. `guide.md`), and
-///  * `<rel-path>::<slug1>/<slug2>/...` for a *section*
-///    (e.g. `guide.md::intro/setup`).
+///  * `<rel-path>::<slug1>::<slug2>::...` for a *section*
+///    (e.g. `guide.md::intro::setup`). The whole hierarchy — file down to
+///    the deepest section — is separated by `::`, matching how code-file
+///    line targets (`src/main.rs::L42`) and the on-disk cache encode levels.
 ///  * `<rel-path>::L<n>` / `<rel-path>::L<a>-<b>` for a *code-file line or
 ///    line-range reference target* (e.g. `src/main.rs::L42`,
 ///    `src/main.rs::L10-20`). These are external targets — never hashed or
@@ -43,12 +45,13 @@ impl NodeId {
 
     /// Identifier for a section, given the file's relative path and the
     /// section's slug chain (each slug is the last path component of an
-    /// ancestor or self).
+    /// ancestor or self). Levels are joined with `::` so the whole hierarchy
+    /// uses one uniform separator.
     pub fn section(rel_path: &str, slug_path: &[String]) -> Self {
         if slug_path.is_empty() {
             NodeId(rel_path.to_string())
         } else {
-            NodeId(format!("{}::{}", rel_path, slug_path.join("/")))
+            NodeId(format!("{}::{}", rel_path, slug_path.join("::")))
         }
     }
 

@@ -173,7 +173,7 @@ mod tests {
         printer.print(&s, &mut out);
         assert!(out.contains("Guide"), "{out}");
         assert!(out.contains("Setup"), "{out}");
-        assert!(out.contains("api.md::api/install"), "{out}");
+        assert!(out.contains("api.md::api::install"), "{out}");
         assert!(!out.contains("→"), "dependency lines should not use arrows: {out}");
         assert!(!out.contains("(leaf)"), "{out}");
         assert!(!out.contains("(no dependencies)"), "{out}");
