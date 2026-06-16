@@ -25,9 +25,13 @@ use nlc_parser::ast::{Block, Inline};
 ///  * the file's relative path for a *file root* (e.g. `guide.md`), and
 ///  * `<rel-path>::<slug1>/<slug2>/...` for a *section*
 ///    (e.g. `guide.md::intro/setup`).
+///  * `<rel-path>::L<n>` / `<rel-path>::L<a>-<b>` for a *code-file line or
+///    line-range reference target* (e.g. `src/main.rs::L42`,
+///    `src/main.rs::L10-20`). These are external targets — never hashed or
+///    cached — used only as edge endpoints for `[[code.rs#L42]]` refs.
 ///
-/// `NodeId`s are cheap to clone and compare; build them with [`NodeId::file`]
-/// and [`NodeId::section`].
+/// `NodeId`s are cheap to clone and compare; build them with [`NodeId::file`],
+/// [`NodeId::section`], [`NodeId::code_line`], and [`NodeId::code_range`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(pub String);
 
@@ -46,6 +50,18 @@ impl NodeId {
         } else {
             NodeId(format!("{}::{}", rel_path, slug_path.join("/")))
         }
+    }
+
+    /// Identifier for a single-line reference into a code file
+    /// (`<rel-path>::L<n>`), e.g. `src/main.rs::L42`.
+    pub fn code_line(rel_path: &str, line: u32) -> Self {
+        NodeId(format!("{rel_path}::L{line}"))
+    }
+
+    /// Identifier for a line-range reference into a code file
+    /// (`<rel-path>::L<a>-<b>`), e.g. `src/main.rs::L10-20`.
+    pub fn code_range(rel_path: &str, start: u32, end: u32) -> Self {
+        NodeId(format!("{rel_path}::L{start}-{end}"))
     }
 
     /// Raw canonical string.
@@ -154,8 +170,6 @@ impl FileNode {
 #[derive(Debug, Clone)]
 pub struct CodeFile {
     /// Number of lines in the source text — used to validate `[[f#L42]]`.
-    // Read by the graph resolver (added in a follow-up commit); written here.
-    #[allow(dead_code)]
     pub line_count: usize,
 }
 
@@ -186,6 +200,15 @@ impl<'a> NodeRef<'a> {
     }
 }
 
+/// A borrowed reference to either kind of tracked file: a parsed Markdown
+/// [`FileNode`] or a [`CodeFile`] reference target. The graph resolver branches
+/// on this to apply Markdown vs code-file semantics.
+#[derive(Debug, Clone, Copy)]
+pub enum FileKind<'a> {
+    Markdown(&'a FileNode),
+    Code(&'a CodeFile),
+}
+
 /// The full parsed workspace.
 #[derive(Debug, Default, Clone)]
 pub struct World {
@@ -202,6 +225,19 @@ pub struct World {
 impl World {
     pub fn file(&self, rel_path: &str) -> Option<&FileNode> {
         self.files.get(rel_path)
+    }
+
+    /// Look up any tracked file — Markdown or code — by its workspace-relative
+    /// key, returning the canonical stored key alongside a [`FileKind`] borrow.
+    /// Markdown files are checked first (a `.md` path is never a code file).
+    /// Used by the graph resolver to branch on target file type.
+    pub fn file_kind(&self, key: &str) -> Option<(&str, FileKind<'_>)> {
+        if let Some((k, v)) = self.files.get_key_value(key) {
+            return Some((k.as_str(), FileKind::Markdown(v)));
+        }
+        self.code_files
+            .get_key_value(key)
+            .map(|(k, v)| (k.as_str(), FileKind::Code(v)))
     }
 
     /// Look up a file by a user-supplied path. The path is normalized
@@ -284,5 +320,55 @@ mod path_tests {
         assert!(w.find_file("配置管理计划.md").is_some());
         assert!(w.find_file(".\\配置管理计划.md").is_some());
         assert!(w.find_file("missing.md").is_none());
+    }
+
+    #[test]
+    fn file_kind_distinguishes_markdown_and_code() {
+        let mut w = World::default();
+        let doc = nlc_parser::parse("# A\n").unwrap();
+        w.files.insert(
+            "guide.md".to_string(),
+            FileNode {
+                path: "guide.md".to_string(),
+                preamble: doc.blocks,
+                sections: Vec::new(),
+                line_count: 1,
+            },
+        );
+        w.code_files.insert(
+            "main.rs".to_string(),
+            CodeFile { line_count: 10 },
+        );
+
+        match w.file_kind("guide.md") {
+            Some((key, FileKind::Markdown(f))) => {
+                assert_eq!(key, "guide.md");
+                assert_eq!(f.path, "guide.md");
+            }
+            other => panic!("expected Markdown, got {other:?}"),
+        }
+        match w.file_kind("main.rs") {
+            Some((key, FileKind::Code(c))) => {
+                assert_eq!(key, "main.rs");
+                assert_eq!(c.line_count, 10);
+            }
+            other => panic!("expected Code, got {other:?}"),
+        }
+        // Markdown is checked first, so a `.md` path can never resolve to Code.
+        assert!(matches!(
+            w.file_kind("guide.md"),
+            Some((_, FileKind::Markdown(_)))
+        ));
+        // Unknown key → None.
+        assert!(w.file_kind("ghost.rs").is_none());
+    }
+
+    #[test]
+    fn node_id_code_constructors() {
+        assert_eq!(NodeId::code_line("src/main.rs", 42).as_str(), "src/main.rs::L42");
+        assert_eq!(
+            NodeId::code_range("src/main.rs", 10, 20).as_str(),
+            "src/main.rs::L10-20"
+        );
     }
 }

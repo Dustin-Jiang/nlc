@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use nlc_parser::ast::{Block, FileRef, FileRefTarget};
 
 use crate::inline_text::slugify;
-use crate::model::{NodeId, NodeRef, World};
+use crate::model::{FileKind, NodeId, NodeRef, World};
 
 /// A single resolved-or-not `[[...]]` reference originating from `from`.
 #[derive(Debug, Clone)]
@@ -35,6 +35,10 @@ pub enum IssueKind {
     AmbiguousSection,
     LineOutOfRange,
     RangeOutOfRange,
+    /// A named/section target (e.g. `[[code.rs#main]]`) was used against a
+    /// non-Markdown (code) file. Code files only support `#L<line>` /
+    /// `#L<a>-L<b>` line locators.
+    UnsupportedCodeTarget,
     /// A circular dependency group; the members are listed in
     /// [`Issue::members`] (sorted for stable reporting).
     Cycle,
@@ -225,19 +229,28 @@ fn refs_in_inlines<'a>(
 
 /// Resolve a single [`FileRef`] to a [`NodeId`] (on success) or an [`Issue`]
 /// (on failure). A reference may resolve successfully AND still produce no
-/// issue; line/range refs that are in-range resolve to the file root.
+/// issue.
 ///
 /// `source_id` is the exact node (file root or section) that owns this ref —
 /// issues are attributed to it so the incremental report can pin them to the
 /// right place.
+///
+/// Resolution branches on the target file's kind:
+///  * **Markdown** targets keep their existing semantics (`Document` /
+///    `Section` / `Line` / `LineRange` all collapse to a file-root or section
+///    [`NodeId`]).
+///  * **Code** targets are line-only: `Document` resolves to the file root,
+///    `Line`/`LineRange` resolve to granular `code.rs::L<n>` [`NodeId`]s after
+///    a bounds check, and a named (`Section`) target is an
+///    [`IssueKind::UnsupportedCodeTarget`] error since code files have no
+///    sections.
 fn resolve(
     world: &World,
     source_id: &NodeId,
     r: &FileRef,
 ) -> (Option<NodeId>, Option<Issue>) {
     let source_file = file_of(source_id);
-    let target_file = resolve_file(world, source_file, r.path.as_deref());
-    let Some(file) = target_file else {
+    let Some(resolved) = resolve_file(world, source_file, r.path.as_deref()) else {
         let raw_path = r.path.clone().unwrap_or_else(|| source_file.to_string());
         return (
             None,
@@ -250,8 +263,21 @@ fn resolve(
         );
     };
 
-    let file_node = world.file(file).expect("file present after resolve_file");
+    match resolved.kind {
+        FileKind::Markdown(file_node) => {
+            resolve_markdown(source_id, resolved.key, file_node, r)
+        }
+        FileKind::Code(code_file) => resolve_code(source_id, resolved.key, code_file, r),
+    }
+}
 
+/// Resolve a [`FileRef`] against a Markdown target file.
+fn resolve_markdown(
+    source_id: &NodeId,
+    file: &str,
+    file_node: &crate::model::FileNode,
+    r: &FileRef,
+) -> (Option<NodeId>, Option<Issue>) {
     match &r.target {
         FileRefTarget::Document => (Some(NodeId::file(file)), None),
         FileRefTarget::Section(text) => {
@@ -334,23 +360,95 @@ fn resolve(
     }
 }
 
+/// Resolve a [`FileRef`] against a non-Markdown (code) target file. Code files
+/// are line-only reference targets: named/section targets are unsupported, and
+/// line/line-range targets resolve to granular `code.rs::L<n>` [`NodeId`]s
+/// after a bounds check against the file's line count.
+fn resolve_code(
+    source_id: &NodeId,
+    file: &str,
+    code_file: &crate::model::CodeFile,
+    r: &FileRef,
+) -> (Option<NodeId>, Option<Issue>) {
+    match &r.target {
+        FileRefTarget::Document => (Some(NodeId::file(file)), None),
+        FileRefTarget::Section(text) => (
+            None,
+            Some(Issue {
+                kind: IssueKind::UnsupportedCodeTarget,
+                source: source_id.clone(),
+                message: format!(
+                    "`{}` references `{}` by name `{}`, but code files only support `#L<line>` / `#L<a>-L<b>` targets",
+                    source_id, file, text
+                ),
+                members: Vec::new(),
+            }),
+        ),
+        FileRefTarget::Line(n) => {
+            if *n == 0 || *n as usize > code_file.line_count {
+                (
+                    None,
+                    Some(Issue {
+                        kind: IssueKind::LineOutOfRange,
+                        source: source_id.clone(),
+                        message: format!(
+                            "`{}` references line {} in {}, which has only {} line(s)",
+                            source_id, n, file, code_file.line_count
+                        ),
+                        members: Vec::new(),
+                    }),
+                )
+            } else {
+                (Some(NodeId::code_line(file, *n)), None)
+            }
+        }
+        FileRefTarget::LineRange(a, b) => {
+            if a > b || *b as usize > code_file.line_count {
+                (
+                    None,
+                    Some(Issue {
+                        kind: IssueKind::RangeOutOfRange,
+                        source: source_id.clone(),
+                        message: format!(
+                            "`{}` references line range L{}-L{} in {}, which has only {} line(s)",
+                            source_id, a, b, file, code_file.line_count
+                        ),
+                        members: Vec::new(),
+                    }),
+                )
+            } else {
+                (Some(NodeId::code_range(file, *a, *b)), None)
+            }
+        }
+    }
+}
+
+/// A file resolved from a `[[...]]` reference path: its canonical workspace key
+/// plus the [`FileKind`], so [`resolve`] can apply Markdown vs code semantics.
+struct ResolvedFile<'w> {
+    key: &'w str,
+    kind: FileKind<'w>,
+}
+
 /// Normalize a wikilink path to a workspace-relative file key, looking it up
-/// in `world.files`. Supports `[[name]]` → `name.md` shorthand and strips a
-/// leading `./`.
-fn resolve_file<'w>(world: &'w World, _source: &str, path: Option<&str>) -> Option<&'w str> {
+/// across both Markdown and code files. Supports `[[name]]` → `name.md`
+/// Markdown shorthand and strips a leading `./`.
+fn resolve_file<'w>(world: &'w World, _source: &str, path: Option<&str>) -> Option<ResolvedFile<'w>> {
     let raw = path.unwrap_or(_source);
     let cleaned = raw.replace('\\', "/");
     let stripped = cleaned.strip_prefix("./").unwrap_or(&cleaned).to_string();
 
-    if let Some((key, _)) = world.files.get_key_value(&stripped) {
-        return Some(key.as_str());
+    if let Some((key, kind)) = world.file_kind(&stripped) {
+        return Some(ResolvedFile { key, kind });
     }
+    // Markdown-only shorthand: `[[name]]` → `name.md`. A `.md` path is always
+    // routed to the Markdown map by collect, so this can only match Markdown.
     let with_md = format!("{stripped}.md");
-    if let Some((key, _)) = world.files.get_key_value(&with_md) {
-        return Some(key.as_str());
+    if let Some((key, kind)) = world.file_kind(&with_md) {
+        return Some(ResolvedFile { key, kind });
     }
-    if let Some((key, _)) = world.files.get_key_value(raw) {
-        return Some(key.as_str());
+    if let Some((key, kind)) = world.file_kind(raw) {
+        return Some(ResolvedFile { key, kind });
     }
     None
 }
@@ -473,6 +571,19 @@ mod tests {
         w
     }
 
+    /// Register code files (path, source) on a world; line_count is derived
+    /// from the source, matching how `collect` builds them.
+    fn with_code(w: &mut World, files: &[(&str, &str)]) {
+        for (path, src) in files {
+            w.code_files.insert(
+                path.to_string(),
+                crate::model::CodeFile {
+                    line_count: src.lines().count(),
+                },
+            );
+        }
+    }
+
     #[test]
     fn resolves_section_ref() {
         let w = world_from([
@@ -582,5 +693,96 @@ mod tests {
         let b_root = NodeId::file("b.md");
         let referrers = g.referrers(&b_root);
         assert_eq!(referrers, &[NodeId::file("a.md")]);
+    }
+
+    #[test]
+    fn resolves_code_line_ref() {
+        let mut w = world_from([("a.md", "[[main.rs#L2]]\n")]);
+        with_code(&mut w, &[("main.rs", "fn main() {}\nfn other() {}\nfn third() {}\n")]);
+        let g = build(&w);
+        assert!(g.issues.is_empty(), "{:?}", g.issues);
+        let edges = g.forward.get(&NodeId::file("a.md")).unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to.as_ref().unwrap().as_str(), "main.rs::L2");
+    }
+
+    #[test]
+    fn resolves_code_line_range_ref() {
+        let mut w = world_from([("a.md", "[[main.rs#L1-L3]]\n")]);
+        with_code(&mut w, &[("main.rs", "a\nb\nc\n")]);
+        let g = build(&w);
+        assert!(g.issues.is_empty(), "{:?}", g.issues);
+        let edges = g.forward.get(&NodeId::file("a.md")).unwrap();
+        assert_eq!(edges[0].to.as_ref().unwrap().as_str(), "main.rs::L1-3");
+    }
+
+    #[test]
+    fn resolves_code_document_ref() {
+        let mut w = world_from([("a.md", "[[main.rs]]\n")]);
+        with_code(&mut w, &[("main.rs", "fn main() {}\n")]);
+        let g = build(&w);
+        assert!(g.issues.is_empty(), "{:?}", g.issues);
+        // A whole-code-file ref resolves to the file root NodeId.
+        assert_eq!(
+            g.forward.get(&NodeId::file("a.md")).unwrap()[0]
+                .to
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            "main.rs"
+        );
+    }
+
+    #[test]
+    fn code_line_out_of_range() {
+        let mut w = world_from([("a.md", "[[main.rs#L99]]\n")]);
+        with_code(&mut w, &[("main.rs", "only\nthree\nlines\n")]);
+        let g = build(&w);
+        assert_eq!(g.issues.len(), 1);
+        assert_eq!(g.issues[0].kind, IssueKind::LineOutOfRange);
+    }
+
+    #[test]
+    fn code_line_range_out_of_bounds() {
+        let mut w = world_from([("a.md", "[[main.rs#L2-L50]]\n")]);
+        with_code(&mut w, &[("main.rs", "a\nb\nc\n")]);
+        let g = build(&w);
+        assert_eq!(g.issues.len(), 1);
+        assert_eq!(g.issues[0].kind, IssueKind::RangeOutOfRange);
+    }
+
+    #[test]
+    fn code_named_target_is_unsupported() {
+        let mut w = world_from([("a.md", "[[main.rs#main]]\n")]);
+        with_code(&mut w, &[("main.rs", "fn main() {}\n")]);
+        let g = build(&w);
+        assert_eq!(g.issues.len(), 1);
+        assert_eq!(g.issues[0].kind, IssueKind::UnsupportedCodeTarget);
+        assert!(g.issues[0].message.contains("#L<line>"));
+    }
+
+    #[test]
+    fn missing_code_file() {
+        let w = world_from([("a.md", "[[ghost.rs#L1]]\n")]);
+        let g = build(&w);
+        assert_eq!(g.issues.len(), 1);
+        assert_eq!(g.issues[0].kind, IssueKind::MissingFile);
+    }
+
+    #[test]
+    fn markdown_line_ref_still_collapses_to_file_root() {
+        // Markdown line refs keep their pre-existing semantics: an in-range
+        // line/range ref resolves to the file root, NOT a granular node.
+        let w = world_from([("a.md", "[[b.md#L1]]\n"), ("b.md", "hi\n")]);
+        let g = build(&w);
+        assert!(g.issues.is_empty(), "{:?}", g.issues);
+        assert_eq!(
+            g.forward.get(&NodeId::file("a.md")).unwrap()[0]
+                .to
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            "b.md"
+        );
     }
 }
