@@ -170,7 +170,7 @@ impl<'a> NodeRef<'a> {
 }
 
 /// The full parsed workspace.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct World {
     /// Workspace root (cwd at scan time).
     #[allow(dead_code)]

@@ -4,15 +4,14 @@
 //! style. The surface area is small enough that a bespoke parser stays
 //! readable.
 
-use crate::check::CheckOptions;
-
-/// The parsed subcommand.
+/// The parsed subcommand. Variants carry their own options as plain fields so
+/// the dispatcher in `main` can construct the matching printer directly.
 #[derive(Debug)]
 pub enum Command {
-    /// Default: incremental validate + report, persisting the cache.
-    Check(CheckOptions),
-    /// Dry-run: report what *would* be revalidated, do not write the cache.
-    Status(CheckOptions),
+    /// Analyze + report AND persist the `.nlc-cache` (default).
+    Check { full: bool },
+    /// Read-only analyze + report.
+    Status { full: bool },
     /// Print the section tree of one file, or every file when none is given.
     List { file: Option<String> },
     /// Print all resolved reference edges.
@@ -30,8 +29,8 @@ nlc — incremental markdown dependency linter
 
 USAGE:
     nlc                       Run `check` in the current directory.
-    nlc check [--full]        Scan, validate, and report (writes .nlc-cache).
-    nlc status [--full]       Like `check` but does not write the cache.
+    nlc check [--full]        Scan, validate, report, AND write .nlc-cache.
+    nlc status [--full]       Like `check` but does NOT write the cache.
     nlc list [<file>]         Print the section tree.
     nlc graph                 Print all cross-file reference edges.
     nlc clean                 Remove the .nlc-cache file.
@@ -53,7 +52,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String>
     let mut it = args.into_iter();
     let _program = it.next();
     let Some(sub) = it.next() else {
-        return Ok(Command::Check(CheckOptions::default()));
+        return Ok(Command::Check { full: false });
     };
     match sub.as_str() {
         "-h" | "--help" | "help" => Ok(Command::Help),
@@ -66,11 +65,10 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String>
                     other => return Err(format!("unknown argument `{other}`")),
                 }
             }
-            let opts = CheckOptions { full };
             if sub == "check" {
-                Ok(Command::Check(opts))
+                Ok(Command::Check { full })
             } else {
-                Ok(Command::Status(opts))
+                Ok(Command::Status { full })
             }
         }
         "list" => {
@@ -123,23 +121,17 @@ mod tests {
 
     #[test]
     fn no_args_is_check() {
-        assert!(matches!(parse(args(&[])), Ok(Command::Check(_))));
+        assert!(matches!(parse(args(&[])), Ok(Command::Check { full: false })));
     }
 
     #[test]
     fn check_full() {
-        match parse(args(&["check", "--full"])) {
-            Ok(Command::Check(o)) => assert!(o.full),
-            other => panic!("{other:?}"),
-        }
+        assert!(matches!(parse(args(&["check", "--full"])), Ok(Command::Check { full: true })));
     }
 
     #[test]
     fn status_no_full() {
-        match parse(args(&["status"])) {
-            Ok(Command::Status(o)) => assert!(!o.full),
-            other => panic!("{other:?}"),
-        }
+        assert!(matches!(parse(args(&["status"])), Ok(Command::Status { full: false })));
     }
 
     #[test]
