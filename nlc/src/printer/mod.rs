@@ -13,10 +13,12 @@ use crate::snapshot::Snapshot;
 pub mod graph;
 pub mod list;
 pub mod status;
+pub mod tree;
 
 pub use graph::GraphPrinter;
 pub use list::ListPrinter;
 pub use status::StatusPrinter;
+pub use tree::TreePrinter;
 
 /// Render a [`Snapshot`] to text.
 ///

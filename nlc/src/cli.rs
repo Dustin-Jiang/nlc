@@ -14,6 +14,8 @@ pub enum Command {
     Check { full: bool },
     /// Print the section tree of one file, or every file when none is given.
     List { file: Option<String> },
+    /// Tree-view of one file's nodes with recursive dependency expansion.
+    Tree { file: String },
     /// Print all resolved reference edges.
     Graph,
     /// Delete the `.nlc-cache` file.
@@ -31,6 +33,7 @@ USAGE:
     nlc                       Read-only status report (default).
     nlc status [--full]       Same as default; never writes the cache.
     nlc check [--full]        Status report AND persist .nlc-cache.
+    nlc tree <file>           Node tree of a file with recursive deps.
     nlc list [<file>]         Print the section tree.
     nlc graph                 Print all cross-file reference edges.
     nlc clean                 Remove the .nlc-cache file.
@@ -77,6 +80,15 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String>
                 return Err("`list` takes at most one file argument".into());
             }
             Ok(Command::List { file })
+        }
+        "tree" => {
+            let Some(file) = it.next() else {
+                return Err("`tree` requires a file argument".into());
+            };
+            if it.next().is_some() {
+                return Err("`tree` takes exactly one file argument".into());
+            }
+            Ok(Command::Tree { file })
         }
         "graph" => {
             if it.next().is_some() {
@@ -137,6 +149,15 @@ mod tests {
     #[test]
     fn list_one_file() {
         assert!(matches!(parse(args(&["list", "a.md"])), Ok(Command::List { .. })));
+    }
+
+    #[test]
+    fn tree_requires_file() {
+        assert!(parse(args(&["tree"])).is_err());
+        assert!(matches!(
+            parse(args(&["tree", "a.md"])),
+            Ok(Command::Tree { .. })
+        ));
     }
 
     #[test]

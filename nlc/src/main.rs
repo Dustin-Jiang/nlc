@@ -64,6 +64,10 @@ fn run(command: Command) -> i32 {
             let snap = Snapshot::build(&cwd());
             render(&printer::ListPrinter { file }, &snap)
         }
+        Command::Tree { file } => {
+            let snap = Snapshot::build(&cwd());
+            render(&printer::TreePrinter { file }, &snap)
+        }
         Command::Graph => {
             let snap = Snapshot::build(&cwd());
             render(&printer::GraphPrinter, &snap)
