@@ -6,6 +6,11 @@
 //! [`build_file_node`], which splits the block stream into a preamble and a
 //! forest of nested [`Section`]s using a single forward scan with a peekable
 //! iterator.
+//!
+//! Every other readable UTF-8 file (Rust sources, configs, plain text, …) is
+//! recorded as a [`CodeFile`] — a reference target only, never parsed or
+//! hashed. Files that are not valid UTF-8 (binaries, images, …) are skipped
+//! silently.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -14,7 +19,7 @@ use std::path::{Path, PathBuf};
 use nlc_parser::ast::{Block, Inline};
 
 use crate::inline_text::{inline_text, slugify};
-use crate::model::{FileNode, Section, World};
+use crate::model::{CodeFile, FileNode, Section, World};
 
 /// Directories that are never descended into, regardless of the
 /// "skip hidden" rule. These are common build outputs and VCS state.
@@ -27,6 +32,11 @@ const SKIP_DIRS: &[&str] = &[
     "build",
     ".cache",
 ];
+
+/// Files that are never collected, even at the workspace root. `.nlc-cache` is
+/// nlc's own runtime state (gitignored) and must not be treated as a code-file
+/// reference target.
+const SKIP_FILES: &[&str] = &[".nlc-cache"];
 
 /// A failure encountered while gathering a single file.
 #[derive(Debug, Clone)]
@@ -43,38 +53,57 @@ pub struct Collected {
     pub errors: Vec<CollectError>,
 }
 
-/// Recursively scan `root` for `.md` files, parse them, and assemble a
-/// [`World`]. Hidden entries and [`SKIP_DIRS`] are pruned.
+/// Recursively scan `root`, parsing `.md` files into [`FileNode`]s and
+/// recording every other readable UTF-8 file as a [`CodeFile`]. Hidden entries
+/// and [`SKIP_DIRS`] are pruned; [`SKIP_FILES`] and non-UTF-8 (binary) files
+/// are skipped silently.
 pub fn collect(root: &Path) -> Collected {
     let mut files = BTreeMap::new();
+    let mut code_files = BTreeMap::new();
     let mut errors = Vec::new();
     let mut entries = Vec::new();
     walk(root, root, &mut entries);
     entries.sort();
     for path in entries {
         let rel = rel_path(root, &path);
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if SKIP_FILES.contains(&name) {
+            continue;
+        }
         match fs::read_to_string(&path) {
-            Ok(src) => match nlc_parser::parse(&src) {
-                Ok(doc) => {
+            Ok(src) => {
+                if is_markdown(name) {
+                    match nlc_parser::parse(&src) {
+                        Ok(doc) => {
+                            let line_count = src.lines().count();
+                            let node = build_file_node(rel.clone(), doc.blocks, line_count);
+                            files.insert(rel, node);
+                        }
+                        Err(e) => errors.push(CollectError {
+                            path: rel_path(root, &path),
+                            message: format!("parse error: {e}"),
+                        }),
+                    }
+                } else {
                     let line_count = src.lines().count();
-                    let node = build_file_node(rel.clone(), doc.blocks, line_count);
-                    files.insert(rel, node);
+                    code_files.insert(rel, CodeFile { line_count });
                 }
-                Err(e) => errors.push(CollectError {
-                    path: rel_path(root, &path),
-                    message: format!("parse error: {e}"),
-                }),
-            },
-            Err(e) => errors.push(CollectError {
-                path: rel,
+            }
+            // Non-UTF-8 (binary) or unreadable file. A `.md` file failing to
+            // read is surprising and worth reporting; anything else is just a
+            // non-text artifact we silently ignore.
+            Err(e) if is_markdown(name) => errors.push(CollectError {
+                path: rel_path(root, &path),
                 message: format!("read error: {e}"),
             }),
+            Err(_) => {}
         }
     }
     Collected {
         world: World {
             root: root.to_path_buf(),
             files,
+            code_files,
         },
         errors,
     }
@@ -96,8 +125,10 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
                 continue;
             }
             walk(root, &path, out);
-        } else if is_markdown(name) {
-            // Hidden markdown files below the root are skipped too.
+        } else {
+            // Hidden files below the root are skipped (matching the directory
+            // rule). At the root itself hidden files are kept, so dotfiles like
+            // `.nlc-cache` are reachable for the SKIP_FILES deny-list.
             if dir != root && name.starts_with('.') {
                 continue;
             }
@@ -344,5 +375,119 @@ mod tests {
         assert_eq!(f.sections[0].slug, "setup");
         assert_eq!(f.sections[1].slug, "setup-1");
         assert_eq!(f.sections[2].slug, "setup-2");
+    }
+
+    /// A throwaway directory under the OS temp dir, removed on drop. Keeps the
+    /// workspace dependency-free (no `tempfile`).
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "nlc-collect-{label}-{}",
+                std::process::id()
+            ));
+            // Start from a clean slate in case a prior run leaked.
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            TempDir { path }
+        }
+
+        fn write(&self, rel: &str, contents: &str) {
+            let full = self.path.join(rel);
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full, contents).unwrap();
+        }
+
+        fn write_bytes(&self, rel: &str, bytes: &[u8]) {
+            let full = self.path.join(rel);
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full, bytes).unwrap();
+        }
+
+        fn root(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn markdown_goes_to_files_code_goes_to_code_files() {
+        let tmp = TempDir::new("md_and_code");
+        tmp.write("guide.md", "# Title\nbody\n");
+        tmp.write("src/main.rs", "fn main() {}\n");
+        tmp.write("Makefile", "all:\n\techo hi\n");
+
+        let collected = collect(tmp.root());
+        assert!(collected.errors.is_empty(), "{:?}", collected.errors);
+        assert!(collected.world.files.contains_key("guide.md"));
+        assert!(!collected.world.code_files.contains_key("guide.md"));
+        let rs = collected.world.code_files.get("src/main.rs").unwrap();
+        assert_eq!(rs.line_count, 1);
+        assert!(collected.world.code_files.contains_key("Makefile"));
+    }
+
+    #[test]
+    fn code_file_line_count_counts_lines() {
+        let tmp = TempDir::new("line_count");
+        tmp.write("a.rs", "line1\nline2\nline3\n");
+        tmp.write("b.rs", "only one, no trailing newline");
+        let collected = collect(tmp.root());
+        assert_eq!(collected.world.code_files["a.rs"].line_count, 3);
+        // A file with no trailing newline still counts as one line.
+        assert_eq!(collected.world.code_files["b.rs"].line_count, 1);
+    }
+
+    #[test]
+    fn binary_files_are_silently_skipped() {
+        let tmp = TempDir::new("binary");
+        tmp.write("ok.md", "# Hi\n");
+        // Invalid UTF-8 (a UTF-16 BOM + garbage) — read_to_string fails.
+        tmp.write_bytes("blob.bin", &[0xff, 0xfe, 0x00, 0x01, 0xc3, 0x28]);
+        let collected = collect(tmp.root());
+        assert!(collected.errors.is_empty(), "{:?}", collected.errors);
+        assert!(collected.world.files.contains_key("ok.md"));
+        assert!(
+            !collected.world.code_files.contains_key("blob.bin"),
+            "binary must not be collected as a code file"
+        );
+    }
+
+    #[test]
+    fn nlc_cache_file_is_not_collected() {
+        let tmp = TempDir::new("cache_skip");
+        tmp.write("doc.md", "# Doc\n");
+        tmp.write(".nlc-cache", "v1\nhash\nhash\n");
+        let collected = collect(tmp.root());
+        assert!(
+            !collected.world.code_files.contains_key(".nlc-cache"),
+            ".nlc-cache is runtime state and must never be a reference target"
+        );
+        assert!(collected.world.files.contains_key("doc.md"));
+    }
+
+    #[test]
+    fn hidden_files_below_root_are_skipped() {
+        let tmp = TempDir::new("hidden");
+        tmp.write("doc.md", "# Doc\n");
+        tmp.write("sub/.hidden.rs", "fn x() {}\n");
+        tmp.write("sub/visible.rs", "fn y() {}\n");
+        let collected = collect(tmp.root());
+        assert!(collected.world.code_files.contains_key("sub/visible.rs"));
+        assert!(
+            !collected.world.code_files.contains_key("sub/.hidden.rs"),
+            "hidden files below the root must be skipped"
+        );
     }
 }

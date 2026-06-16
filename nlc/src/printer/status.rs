@@ -15,8 +15,9 @@ impl Printer for StatusPrinter {
         line(
             out,
             &format!(
-                "nlc: scanned {} file(s), {} section(s)",
+                "nlc: scanned {} markdown file(s), {} code file(s), {} section(s)",
                 s.world.files.len(),
+                s.world.code_files.len(),
                 s.world.section_count()
             ),
         );

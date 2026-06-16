@@ -1,11 +1,14 @@
 //! Core data model: a hierarchical section tree per Markdown file, plus the
 //! [`World`] container holding every parsed file in the workspace.
 //!
-//! A file is split into a (possibly empty) preamble — the blocks appearing
-//! before the first heading — and a forest of top-level sections. Each
-//! [`Section`] owns the blocks belonging directly to it (everything up to the
-//! next heading at the same or shallower level) plus a list of nested child
+//! A Markdown file is split into a (possibly empty) preamble — the blocks
+//! appearing before the first heading — and a forest of top-level sections.
+//! Each [`Section`] owns the blocks belonging directly to it (everything up to
+//! the next heading at the same or shallower level) plus a list of nested child
 //! sections (any deeper headings encountered while scanning its body).
+//!
+//! Non-Markdown text files (any UTF-8 file that is not `.md`) are tracked as
+//! [`CodeFile`]s — reference targets only, never parsed, hashed, or cached.
 //!
 //! Every node — a file root or a section — is identified by a stable
 //! [`NodeId`], which is what the dependency graph, the hasher, and the on-disk
@@ -142,6 +145,20 @@ impl FileNode {
     }
 }
 
+/// A non-Markdown text file tracked only as a reference target. "Code" here
+/// means *any* UTF-8 file that is not `.md` — Rust sources, configs, plain
+/// text, the lot. Code files are **not** parsed into sections, **not** hashed,
+/// and **not** recorded in the on-disk cache; they exist in the [`World`]
+/// solely so `[[code.rs#L42]]`-style line references can be validated for
+/// existence and line-range bounds.
+#[derive(Debug, Clone)]
+pub struct CodeFile {
+    /// Number of lines in the source text — used to validate `[[f#L42]]`.
+    // Read by the graph resolver (added in a follow-up commit); written here.
+    #[allow(dead_code)]
+    pub line_count: usize,
+}
+
 /// A borrowed reference to either kind of node.
 #[derive(Debug, Clone, Copy)]
 pub enum NodeRef<'a> {
@@ -175,8 +192,11 @@ pub struct World {
     /// Workspace root (cwd at scan time).
     #[allow(dead_code)]
     pub root: PathBuf,
-    /// Files keyed by workspace-relative path.
+    /// Markdown files keyed by workspace-relative path.
     pub files: BTreeMap<String, FileNode>,
+    /// Non-Markdown text files (code/config/plain-text), keyed by
+    /// workspace-relative path. Reference targets only — never hashed/cached.
+    pub code_files: BTreeMap<String, CodeFile>,
 }
 
 impl World {
