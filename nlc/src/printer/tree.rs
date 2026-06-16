@@ -102,10 +102,10 @@ fn print_children(children: &[Child<'_>], prefix: &str, ctx: &Ctx<'_>, visited: 
                 match to {
                     Some(target) => {
                         if visited.contains(target) {
-                            let _ = writeln!(out, "{prefix}{connector}→ {target} (cycle)");
+                            let _ = writeln!(out, "{prefix}{connector}{target} (cycle)");
                         } else {
                             visited.insert(target.clone());
-                            let _ = writeln!(out, "{prefix}{connector}→ {target}");
+                            let _ = writeln!(out, "{prefix}{connector}{target}");
                             // Recursively expand the target's forward deps.
                             let target_deps: Vec<Child> = ctx
                                 .snap
@@ -126,7 +126,7 @@ fn print_children(children: &[Child<'_>], prefix: &str, ctx: &Ctx<'_>, visited: 
                         }
                     }
                     None => {
-                        let _ = writeln!(out, "{prefix}{connector}→ <unresolved>  ({raw})");
+                        let _ = writeln!(out, "{prefix}{connector}<unresolved>  ({raw})");
                     }
                 }
             }
@@ -173,7 +173,8 @@ mod tests {
         printer.print(&s, &mut out);
         assert!(out.contains("Guide"), "{out}");
         assert!(out.contains("Setup"), "{out}");
-        assert!(out.contains("→ api.md::api/install"), "{out}");
+        assert!(out.contains("api.md::api/install"), "{out}");
+        assert!(!out.contains("→"), "dependency lines should not use arrows: {out}");
         assert!(!out.contains("(leaf)"), "{out}");
         assert!(!out.contains("(no dependencies)"), "{out}");
     }
