@@ -342,6 +342,102 @@ fn empty_input() {
     let doc = parse("").unwrap();
     assert!(doc.blocks.is_empty());
     assert!(doc.references.is_empty());
+    assert!(doc.frontmatter.is_none());
+}
+
+// ---- YAML frontmatter ----
+
+#[test]
+fn frontmatter_basic_dashes() {
+    let src = "---\ntitle: Hello\ntags: [a, b]\n---\n\n# Body\n";
+    let doc = parse(src).unwrap();
+    assert_eq!(
+        doc.frontmatter.as_deref(),
+        Some("title: Hello\ntags: [a, b]")
+    );
+    // Body is unaffected: frontmatter never enters the block list.
+    assert_eq!(
+        doc.blocks,
+        vec![Block::Heading {
+            level: 1,
+            inlines: vec![text("Body")],
+        }]
+    );
+}
+
+#[test]
+fn frontmatter_dots_close() {
+    // Pandoc-style `...` closing fence.
+    let src = "---\nkey: val\n...\ntext\n";
+    let doc = parse(src).unwrap();
+    assert_eq!(doc.frontmatter.as_deref(), Some("key: val"));
+    assert_eq!(
+        doc.blocks,
+        vec![Block::Paragraph(vec![text("text")])]
+    );
+}
+
+#[test]
+fn frontmatter_empty_body() {
+    let doc = parse("---\n---\nrest\n").unwrap();
+    assert_eq!(doc.frontmatter.as_deref(), Some(""));
+    assert_eq!(
+        doc.blocks,
+        vec![Block::Paragraph(vec![text("rest")])]
+    );
+}
+
+#[test]
+fn frontmatter_no_trailing_newline() {
+    let doc = parse("---\nx: 1\n---").unwrap();
+    assert_eq!(doc.frontmatter.as_deref(), Some("x: 1"));
+    assert!(doc.blocks.is_empty());
+}
+
+#[test]
+fn frontmatter_tolerates_trailing_whitespace_on_fence() {
+    let doc = parse("---   \nx: 1\n---   \nbody\n").unwrap();
+    assert_eq!(doc.frontmatter.as_deref(), Some("x: 1"));
+    assert_eq!(
+        doc.blocks,
+        vec![Block::Paragraph(vec![text("body")])]
+    );
+}
+
+#[test]
+fn frontmatter_must_be_first_line() {
+    // Leading blank line disqualifies the opening fence.
+    let doc = parse("\n---\nx: 1\n---\n").unwrap();
+    assert!(doc.frontmatter.is_none());
+}
+
+#[test]
+fn unterminated_frontmatter_is_not_frontmatter() {
+    // No closing fence -> the leading `---` is just a thematic break.
+    let doc = parse("---\nx: 1\n").unwrap();
+    assert!(doc.frontmatter.is_none());
+    assert_eq!(doc.blocks, vec![Block::ThematicBreak, Block::Paragraph(vec![text("x: 1")])]);
+}
+
+#[test]
+fn frontmatter_with_reference_definitions_after() {
+    let src = "---\nmeta: yes\n---\n\n[a]: http://u\n\nSee [a].\n";
+    let doc = parse(src).unwrap();
+    assert_eq!(doc.frontmatter.as_deref(), Some("meta: yes"));
+    assert_eq!(doc.references.len(), 1);
+    assert_eq!(doc.references[0].destination, "http://u");
+    assert_eq!(
+        doc.blocks,
+        vec![Block::Paragraph(vec![
+            text("See "),
+            Inline::Link {
+                text: vec![text("a")],
+                destination: "http://u".into(),
+                title: None,
+            },
+            text("."),
+        ])]
+    );
 }
 
 // ---- `[[...]]` cross-file references ----

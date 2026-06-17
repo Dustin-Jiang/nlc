@@ -3,7 +3,7 @@
 // builds the nested `Document` AST. Inline content is parsed via `inline`.
 
 use crate::ast::{Block, Document, ListItem, Reference};
-use crate::block::token::{CodeData, HeadingData, ItemData, ListData, RefData, Token};
+use crate::block::token::{CodeData, FrontMatterData, HeadingData, ItemData, ListData, RefData, Token};
 use crate::inline;
 use crate::Part;
 
@@ -20,6 +20,7 @@ extern {
         "hr"       => Token::ThematicBreak,
         "html"     => Token::HtmlBlock(<String>),
         "refdef"   => Token::ReferenceDef(<RefData>),
+        "frontmatter" => Token::FrontMatter(<FrontMatterData>),
         "bqo"      => Token::BlockquoteOpen,
         "bqc"      => Token::BlockquoteClose,
         "lo"       => Token::ListOpen(<ListData>),
@@ -37,6 +38,7 @@ pub Doc: Document = {
             match p {
                 Part::Block(b) => doc.blocks.push(b),
                 Part::Ref(r) => doc.references.push(r),
+                Part::FrontMatter(s) => doc.frontmatter = Some(s),
             }
         }
         doc
@@ -50,6 +52,7 @@ Part: Part = {
         destination: r.destination,
         title: r.title,
     }),
+    <fm:"frontmatter"> => Part::FrontMatter(fm.body),
 };
 
 Block: Block = {

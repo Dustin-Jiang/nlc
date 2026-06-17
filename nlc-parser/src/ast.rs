@@ -8,6 +8,11 @@ pub struct Document {
     /// Link reference definitions collected during parsing. These are used
     /// to resolve `[text][label]` / `[label]` style links inside the text.
     pub references: Vec<Reference>,
+    /// Raw YAML frontmatter body when the document opens with a `---` fence,
+    /// without the surrounding fence lines. `None` when no frontmatter is
+    /// present. The body is left unparsed; callers decide which YAML library
+    /// (if any) to apply.
+    pub frontmatter: Option<String>,
 }
 
 impl Document {
@@ -15,6 +20,7 @@ impl Document {
         Self {
             blocks,
             references: Vec::new(),
+            frontmatter: None,
         }
     }
 

@@ -11,7 +11,7 @@
 //! text as a `String`, and the inline parser runs afterwards.
 
 use crate::block::token::{
-    CodeData, HeadingData, ItemData, ListData, RefData, Spanned, Token,
+    CodeData, FrontMatterData, HeadingData, ItemData, ListData, RefData, Spanned, Token,
 };
 
 /// A frame on the container stack tracked while lexing.
@@ -119,6 +119,7 @@ impl Lexer {
 
     fn run(input: &str) -> Vec<Spanned> {
         let mut lx = Lexer::new(input);
+        lx.maybe_lex_frontmatter();
         while lx.i < lx.lines.len() {
             let line = lx.lines[lx.i].clone();
             lx.i += 1;
@@ -377,6 +378,54 @@ impl Lexer {
 /// Lex a Markdown document into a block-level token stream.
 pub fn lex(input: &str) -> Vec<Spanned> {
     Lexer::run(input)
+}
+
+impl Lexer {
+    /// Detect and consume a leading YAML frontmatter block, if present.
+    ///
+    /// Matches the widely-adopted convention (Jekyll / Hugo / Pandoc / GFM):
+    /// the opening fence (`---`) must be the very first line of the document,
+    /// and the block closes at the first subsequent line that is `---` or
+    /// `...`. If no closing fence is found, the opening `---` is *not*
+    /// treated as frontmatter — it falls through to ordinary block lexing
+    /// (where a bare `---` is a thematic break).
+    ///
+    /// Trailing whitespace on a fence line is tolerated; the body is carried
+    /// verbatim (joined with `\n`) without any parsing.
+    fn maybe_lex_frontmatter(&mut self) {
+        if !self.is_document_start() {
+            return;
+        }
+        // Opening fence: first line must be exactly `---` (modulo whitespace).
+        let Some(first) = self.lines.first() else {
+            return;
+        };
+        if first.trim_end() != "---" {
+            return;
+        }
+        // Find the closing fence (`---` or `...`).
+        let mut close = None;
+        for idx in 1..self.lines.len() {
+            let t = self.lines[idx].trim();
+            if t == "---" || t == "..." {
+                close = Some(idx);
+                break;
+            }
+        }
+        let Some(close) = close else {
+            // Unterminated -> not frontmatter; let normal lexing handle it.
+            return;
+        };
+        let body = self.lines[1..close].join("\n");
+        self.emit(Token::FrontMatter(FrontMatterData { body }));
+        self.i = close + 1;
+    }
+
+    /// True only when nothing has been consumed yet: frontmatter is a
+    /// document-level construct and must precede all other content.
+    fn is_document_start(&self) -> bool {
+        self.i == 0 && self.out.is_empty() && self.frames.is_empty() && self.leaf.is_none()
+    }
 }
 
 // -------------------- helper functions --------------------

@@ -32,6 +32,14 @@ pub struct ItemData {
     pub task: Option<bool>,
 }
 
+/// Raw body of a YAML frontmatter block (the text between the opening `---`
+/// and the closing `---` / `...` fence, excluding the fence lines themselves).
+/// Only emitted when the document opens with a frontmatter fence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontMatterData {
+    pub body: String,
+}
+
 /// A token in the block-level token stream.
 ///
 /// The stream is "flat" but carries explicit open/close markers for container
@@ -47,6 +55,7 @@ pub enum Token {
     ThematicBreak,
     HtmlBlock(String),
     ReferenceDef(RefData),
+    FrontMatter(FrontMatterData),
 
     // Container blocks.
     BlockquoteOpen,

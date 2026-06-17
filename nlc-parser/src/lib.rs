@@ -27,10 +27,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Internal helper used by the block grammar to separate reference definitions
-/// from regular blocks while collecting top-level parts.
+/// and frontmatter from regular blocks while collecting top-level parts.
 pub(crate) enum Part {
     Block(Block),
     Ref(Reference),
+    FrontMatter(String),
 }
 
 /// Parse a Markdown document into a [`Document`] AST.
