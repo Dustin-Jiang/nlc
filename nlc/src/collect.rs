@@ -1,7 +1,8 @@
 //! File-system scanning, parsing, and construction of [`World`].
 //!
-//! The walker descends into the workspace root recursively, skipping hidden
-//! entries and a small deny-list of build/VCS directories. Each `.md` file is
+//! The walker descends into the workspace root recursively, honouring
+//! `.gitignore` files (root and subdirectories), a small deny-list of
+//! build/VCS directories, and the hidden-entry rule. Each `.md` file is
 //! parsed with [`nlc_parser`] and turned into a [`FileNode`] by
 //! [`build_file_node`], which splits the block stream into a preamble and a
 //! forest of nested [`Section`]s using a single forward scan with a peekable
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use nlc_parser::ast::{Block, Inline};
 
+use crate::gitignore::{is_ignored, load as load_gitignore, Gitignore};
 use crate::inline_text::{inline_text, slugify};
 use crate::model::{CodeFile, FileNode, Section, World};
 
@@ -54,15 +56,16 @@ pub struct Collected {
 }
 
 /// Recursively scan `root`, parsing `.md` files into [`FileNode`]s and
-/// recording every other readable UTF-8 file as a [`CodeFile`]. Hidden entries
-/// and [`SKIP_DIRS`] are pruned; [`SKIP_FILES`] and non-UTF-8 (binary) files
-/// are skipped silently.
+/// recording every other readable UTF-8 file as a [`CodeFile`]. Hidden entries,
+/// [`SKIP_DIRS`], [`SKIP_FILES`], non-UTF-8 (binary) files, and anything
+/// matched by a `.gitignore` are pruned.
 pub fn collect(root: &Path) -> Collected {
     let mut files = BTreeMap::new();
     let mut code_files = BTreeMap::new();
     let mut errors = Vec::new();
     let mut entries = Vec::new();
-    walk(root, root, &mut entries);
+    let mut ignores: Vec<Gitignore> = Vec::new();
+    walk(root, root, &mut ignores, &mut entries);
     entries.sort();
     for path in entries {
         let rel = rel_path(root, &path);
@@ -109,31 +112,49 @@ pub fn collect(root: &Path) -> Collected {
     }
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut sub_entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
-    sub_entries.sort();
-    for path in sub_entries {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if path.is_dir() {
-            if SKIP_DIRS.contains(&name) {
-                continue;
+fn walk(root: &Path, dir: &Path, ignores: &mut Vec<Gitignore>, out: &mut Vec<PathBuf>) {
+    // Load this directory's `.gitignore` (if any) so it applies to everything
+    // below it. It is popped on return so sibling subtrees don't inherit it.
+    let pushed = load_gitignore(dir);
+    if let Some(gi) = &pushed {
+        ignores.push(gi.clone());
+    }
+
+    if let Ok(rd) = fs::read_dir(dir) {
+        let mut sub_entries: Vec<PathBuf> =
+            rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        sub_entries.sort();
+        for path in sub_entries {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if path.is_dir() {
+                if SKIP_DIRS.contains(&name) {
+                    continue;
+                }
+                if dir != root && name.starts_with('.') {
+                    continue;
+                }
+                if is_ignored(ignores, &path, true) {
+                    continue;
+                }
+                walk(root, &path, ignores, out);
+            } else {
+                // Hidden files below the root are skipped (matching the
+                // directory rule). At the root itself hidden files are kept,
+                // so dotfiles like `.nlc-cache` are reachable for the
+                // SKIP_FILES deny-list.
+                if dir != root && name.starts_with('.') {
+                    continue;
+                }
+                if is_ignored(ignores, &path, false) {
+                    continue;
+                }
+                out.push(path);
             }
-            if dir != root && name.starts_with('.') {
-                continue;
-            }
-            walk(root, &path, out);
-        } else {
-            // Hidden files below the root are skipped (matching the directory
-            // rule). At the root itself hidden files are kept, so dotfiles like
-            // `.nlc-cache` are reachable for the SKIP_FILES deny-list.
-            if dir != root && name.starts_with('.') {
-                continue;
-            }
-            out.push(path);
         }
+    }
+
+    if pushed.is_some() {
+        ignores.pop();
     }
 }
 
@@ -488,6 +509,88 @@ mod tests {
         assert!(
             !collected.world.code_files.contains_key("sub/.hidden.rs"),
             "hidden files below the root must be skipped"
+        );
+    }
+
+    #[test]
+    fn gitignore_prunes_files_and_dirs() {
+        let tmp = TempDir::new("gitignore");
+        tmp.write(
+            ".gitignore",
+            "*.log\n/target/\n__pycache__/\n*.tmp\n",
+        );
+        tmp.write("guide.md", "# Guide\n");
+        tmp.write("debug.log", "log\n");
+        tmp.write("src/main.rs", "fn main() {}\n");
+        tmp.write("target/out.o", "built\n");
+        tmp.write("deep/a.tmp", "temp\n");
+        let collected = collect(tmp.root());
+        assert!(collected.errors.is_empty(), "{:?}", collected.errors);
+        assert!(collected.world.files.contains_key("guide.md"));
+        assert!(collected.world.code_files.contains_key("src/main.rs"));
+        assert!(
+            !collected.world.code_files.contains_key("debug.log"),
+            "*.log must be ignored"
+        );
+        assert!(
+            !collected.world.code_files.contains_key("target/out.o"),
+            "/target/ must not be descended into"
+        );
+        assert!(
+            !collected.world.code_files.contains_key("deep/a.tmp"),
+            "*.tmp must be ignored at any depth"
+        );
+    }
+
+    #[test]
+    fn gitignore_negation_reincludes() {
+        let tmp = TempDir::new("gitignore_neg");
+        tmp.write(".gitignore", "*.md\n!important.md\n");
+        tmp.write("dropped.md", "# Drop\n");
+        tmp.write("important.md", "# Keep\n");
+        let collected = collect(tmp.root());
+        assert!(
+            !collected.world.files.contains_key("dropped.md"),
+            "*.md should ignore dropped.md"
+        );
+        assert!(
+            collected.world.files.contains_key("important.md"),
+            "!important.md should re-include it"
+        );
+    }
+
+    #[test]
+    fn nested_gitignore_applies_to_subtree() {
+        let tmp = TempDir::new("gitignore_nested");
+        // Root ignores all .rs, but a nested .gitignore re-includes one file.
+        tmp.write(".gitignore", "*.rs\n");
+        tmp.write("top.rs", "fn top() {}\n");
+        tmp.write("pkg/.gitignore", "!lib.rs\n");
+        tmp.write("pkg/lib.rs", "fn lib() {}\n");
+        tmp.write("pkg/secret.rs", "fn secret() {}\n");
+        let collected = collect(tmp.root());
+        assert!(!collected.world.code_files.contains_key("top.rs"));
+        assert!(
+            collected.world.code_files.contains_key("pkg/lib.rs"),
+            "nested negation should re-include pkg/lib.rs"
+        );
+        assert!(!collected.world.code_files.contains_key("pkg/secret.rs"));
+    }
+
+    #[test]
+    fn dir_only_gitignore_keeps_same_named_file() {
+        let tmp = TempDir::new("gitignore_dironly");
+        tmp.write(".gitignore", "build/\n");
+        tmp.write("build/x.txt", "in dir\n");
+        tmp.write("build.txt", "a file\n");
+        let collected = collect(tmp.root());
+        assert!(
+            !collected.world.code_files.contains_key("build/x.txt"),
+            "build/ dir must be pruned"
+        );
+        assert!(
+            collected.world.code_files.contains_key("build.txt"),
+            "trailing-slash pattern must not match a file"
         );
     }
 }

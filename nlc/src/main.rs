@@ -8,6 +8,7 @@
 mod cache;
 mod cli;
 mod collect;
+mod gitignore;
 mod graph;
 mod hash;
 mod inline_text;
