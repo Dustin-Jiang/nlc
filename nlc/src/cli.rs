@@ -47,200 +47,145 @@ fn usage(message: impl Into<String>, sub: &str) -> UsageError {
 const HELP: &str = "\
 nlc — incremental markdown dependency linter
 
-USAGE:
-    nlc [command] [args]
+Usage: nlc [COMMAND] [ARGS]
 
-    With no command, `nlc` runs a read-only status report (same as
-    `nlc status`).
+With no command, runs a read-only status report (same as `nlc status`).
 
-COMMANDS:
-    status      Analyze the workspace and report issues (read-only).
-    check       Analyze, report, and persist .nlc-cache.
-    list        Print the section outline of one file, or all files.
-    tree        Print a file's node tree with recursive dep expansion.
-    graph       Print every cross-file reference edge.
-    clean       Delete the .nlc-cache file.
-    ast         Parse one file and dump its AST (debug).
-    help        Show help for nlc or one of its commands.
+Commands:
+  status  Analyze the workspace and report issues (read-only)
+  check   Analyze, report, and persist .nlc-cache
+  list    Print the section outline of one file, or all files
+  tree    Print a file's node tree with recursive dep expansion
+  graph   Print every cross-file reference edge
+  clean   Delete the .nlc-cache file
+  ast     Parse one file and dump its AST (debug)
+  help    Show help for nlc or one of its commands
 
-    Run `nlc <command> --help` for details on a command.
+Options:
+      --full  status/check: re-report everything, not only the cache delta
+  -h, --help  Print help
 
-FLAGS:
-    --full      status/check: re-report every node's issues, not only the
-                delta since the cached run.
-    -h, --help  Show help; with a command, show that command's help.
-
-EXIT CODES:
-    0   clean
-    1   validation errors (dangling refs, cycles, parse errors)
-    2   usage error
-
-EXAMPLES:
-    nlc check                 # report and persist .nlc-cache
-    nlc --full                # re-report everything, ignoring the delta
-    nlc tree docs/guide.md    # dependency tree of one file
-    nlc help tree             # detailed help for `tree`
+Run `nlc <command> --help` for more information on a command.
+Exit status: 0 clean, 1 validation errors, 2 usage error
 ";
 
 const STATUS_HELP: &str = "\
-nlc status — analyze the workspace and report issues (read-only)
+Analyze the workspace and report issues (read-only)
 
-USAGE:
-    nlc status [--full]
-    nlc [--full]                (default when no command is given)
+Usage: nlc status [--full]
 
-DESCRIPTION:
-    Collects every Markdown file under the workspace (honoring
-    .gitignore), resolves all [[...]] cross-file references, and reports
-    issues: missing files or sections, ambiguous targets, code-line
-    targets out of range, unsupported code targets, and cycles.
+Collects every Markdown file under the workspace (honoring .gitignore),
+resolves all [[...]] cross-file references, and reports issues: missing
+files or sections, ambiguous targets, out-of-range code lines, and
+cycles.
 
-    With a `.nlc-cache` written by a previous `nlc check`, only nodes
-    whose content — or whose transitive dependencies — changed are
-    re-reported. Never writes the cache.
+With a `.nlc-cache` written by a previous `nlc check`, only nodes whose
+content — or whose transitive dependencies — changed are re-reported.
+Never writes the cache.
 
-OPTIONS:
-    --full        Re-report every node's issues, ignoring the cache delta.
-    -h, --help    Show this help.
-
-EXIT CODES:
-    0   clean
-    1   validation errors
-    2   usage error
+Options:
+      --full  Re-report every node's issues, ignoring the cache delta
+  -h, --help  Print help
 ";
 
 const CHECK_HELP: &str = "\
-nlc check — analyze, report, and persist .nlc-cache
+Analyze, report, and persist .nlc-cache
 
-USAGE:
-    nlc check [--full]
+Usage: nlc check [--full]
 
-DESCRIPTION:
-    Same report as `nlc status`, but also writes `.nlc-cache` at the
-    workspace root. Run it after edits so subsequent read-only `nlc` /
-    `nlc status` runs can report only what changed.
+Same report as `nlc status`, but also writes `.nlc-cache` at the
+workspace root. Run it after edits so subsequent read-only runs can
+report only what changed. The cache is written even when validation
+fails.
 
-OPTIONS:
-    --full        Re-report every node's issues, ignoring the cache delta.
-    -h, --help    Show this help.
-
-EXIT CODES:
-    0   clean
-    1   validation errors (cache is still written)
-    2   usage error
+Options:
+      --full  Re-report every node's issues, ignoring the cache delta
+  -h, --help  Print help
 ";
 
 const LIST_HELP: &str = "\
-nlc list — print section outlines
+Print the section outline of one file, or all files
 
-USAGE:
-    nlc list [<file>]
+Usage: nlc list [<file>]
 
-DESCRIPTION:
-    Prints the heading outline of one Markdown file — each section as an
-    indented `#`-heading line, with `(N block(s))` under headings that
-    have body content — or of every workspace file when no file is
-    given. A non-empty preamble is noted as `(preamble: N block(s))`.
+Each section is an indented `#`-heading line, with `(N block(s))` under
+headings that have body content; a non-empty preamble shows as
+`(preamble: N block(s))`.
 
-ARGS:
-    <file>    File to outline, relative to the workspace root. Optional.
+Arguments:
+  [<file>]  File to outline, relative to the workspace root
 
-EXIT CODES:
-    0   success
-    2   unknown file / usage error
+Options:
+  -h, --help  Print help
 ";
 
 const TREE_HELP: &str = "\
-nlc tree — print a file's node tree with recursive dependency expansion
+Print a file's node tree with recursive dependency expansion
 
-USAGE:
-    nlc tree <file>
+Usage: nlc tree <file>
 
-DESCRIPTION:
-    Renders one file's section hierarchy and, under every node, expands
-    its forward [[...]] dependencies — following edges across files — to
-    show the full transitive dependency footprint.
+Renders the file's section hierarchy and, under every node, expands its
+forward [[...]] dependencies across files. Markdown targets (documents
+and their sections) expand their own section trees too; code targets
+(e.g. src/ui.rs::L12-20) are leaves. Nodes already expanded higher in
+the tree are labeled `(cycle)`; unresolvable refs print as
+`<unresolved>  ([[...]])`.
 
-    * A Markdown target (a document or one of its sections) expands its
-      own section tree as well; code-file targets (e.g. src/main.rs,
-      src/ui.rs::L12-20) are leaves.
-    * A node already expanded higher in the tree is not expanded twice;
-      the repeat is labeled `(cycle)`.
-    * A reference that cannot be resolved prints as
-      `<unresolved>  (original [[...]] text)`.
+Arguments:
+  <file>  File to render, relative to the workspace root
 
-ARGS:
-    <file>    File to render, relative to the workspace root.
-
-EXAMPLES:
-    nlc tree docs/001-architecture.md
-
-EXIT CODES:
-    0   success
-    2   unknown file / usage error
+Options:
+  -h, --help  Print help
 ";
 
 const GRAPH_HELP: &str = "\
-nlc graph — print every cross-file reference edge
+Print every cross-file reference edge
 
-USAGE:
-    nlc graph
+Usage: nlc graph
 
-DESCRIPTION:
-    Prints the resolved reference graph as one `from -> to` edge per
-    line, sorted by source node. Unresolvable references appear as
-    `from -> <unresolved>  ([[...]])`. Prints `(no cross-file
-    references)` for an edge-less workspace.
+One `from -> to` line per edge, sorted by source node; unresolvable
+refs appear as `from -> <unresolved>  ([[...]])`, or `(no cross-file
+references)` for an edge-less workspace. Unresolved refs are reported
+inline, not fatal.
 
-EXIT CODES:
-    0   success (unresolved references are reported inline, not fatal)
+Options:
+  -h, --help  Print help
 ";
 
 const CLEAN_HELP: &str = "\
-nlc clean — delete .nlc-cache
+Delete the .nlc-cache file
 
-USAGE:
-    nlc clean
+Usage: nlc clean
 
-DESCRIPTION:
-    Removes the `.nlc-cache` file at the workspace root, so the next
-    status run reports everything again. Succeeds with a note when
-    there is no cache to remove.
+Removes `.nlc-cache` at the workspace root so the next status run
+reports everything again. Succeeds with a note when there is no cache.
 
-EXIT CODES:
-    0   removed, or nothing to remove
-    1   cache file could not be removed
+Options:
+  -h, --help  Print help
 ";
 
 const AST_HELP: &str = "\
-nlc ast — parse one file and dump its AST (debug)
+Parse one file and dump its AST (debug)
 
-USAGE:
-    nlc ast <file>
+Usage: nlc ast <file>
 
-DESCRIPTION:
-    Reads the file directly from disk — no workspace scan, no cache —
-    and pretty-prints the nlc-parser document AST as Rust debug output.
+Reads the file directly from disk — no workspace scan, no cache — and
+pretty-prints the nlc-parser document AST as Rust debug output.
 
-ARGS:
-    <file>    Path to parse, as given (relative to the current directory).
+Arguments:
+  <file>  Path to parse, relative to the current directory
 
-EXIT CODES:
-    0   success
-    1   parse error
-    2   file could not be read / usage error
+Options:
+  -h, --help  Print help
 ";
 
 const HELP_HELP: &str = "\
-nlc help — show help
+Show help for nlc or one of its commands
 
-USAGE:
-    nlc help [<command>]
-    nlc [<command>] --help
+Usage: nlc help [<command>]
 
-DESCRIPTION:
-    With no argument, prints the overview. With a command name, prints
-    that command's detailed help.
+Arguments:
+  [<command>]  Command to show help for
 ";
 
 /// Detailed help text per subcommand, keyed by canonical name.
