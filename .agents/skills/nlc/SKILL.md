@@ -1,6 +1,6 @@
 ---
 name: nlc
-description: Use nlc to keep Markdown documentation and source code in sync via [[...]] cross-references. Invoke when the user runs or asks about nlc (status/check/graph/tree/list/clean), needs to fix nlc-reported errors (dangling refs, line out of range, ambiguous section, circular dependency), wants to update code after editing docs, or wants to update a doc's [[code#L..]] line references after editing code. Covers commands, Markdown↔Markdown and Markdown→code reference syntax, and the bidirectional doc⇄code synchronization workflow.
+description: Use nlc to keep Markdown documentation and source code in sync via [[...]] cross-references. Invoke when the user runs or asks about nlc (status/check/graph/tree/list/clean), needs to fix nlc-reported errors (dangling refs, line out of range, ambiguous section, circular dependency), wants to update code after editing docs, or wants to update a doc's [[code#L..]] line references after editing code. Covers commands, Markdown↔Markdown and Markdown→code reference syntax, the bidirectional doc⇄code synchronization workflow, and the writing style to follow when authoring or revising workspace docs.
 ---
 
 # nlc — Markdown ⇄ Code Cross-Reference Tracker
@@ -53,7 +53,7 @@ Invoke this skill when the user:
 | `nlc` / `nlc status [--full]` | Incremental status: changed / affected / up-to-date nodes + issues. | no |
 | `nlc check [--full]` | Same report, then persist `.nlc-cache`. Run at the end of a change unit. | **yes** |
 | `nlc graph` | Every cross-file edge: `from -> to` (or `from -> <unresolved>  ([[raw]])`). | no |
-| `nlc tree <file>` | ASCII tree of one file's nodes, recursively expanding forward deps. | no |
+| `nlc tree <file>` | ASCII tree of one file's nodes; recursively expands forward deps, and Markdown targets also expand their section trees. | no |
 | `nlc list [<file>]` | Plain section-tree dump (one file or every file). | no |
 | `nlc clean` | Delete `.nlc-cache` (force full re-validation next run). | — |
 | `nlc ast <file>` | Debug: dump the parsed Markdown AST. | no |
@@ -107,7 +107,7 @@ don't commit until `nlc` reports `ok`.
 Markdown changed (a spec, a description, steps) and the code must follow.
 
 1. `nlc check` — mark the pre-edit state clean (skip if already clean).
-2. Edit the Markdown section.
+2. Edit the Markdown section, writing per the style rules below.
 3. `nlc` → status lists `[modified] <file>::<section>`. That's the change set.
 4. `nlc tree <file>` (or `nlc graph | grep <file>`) → read off that section's
    code refs, e.g. `src/main.rs::L42`.
@@ -133,6 +133,31 @@ it are now stale.
 ### Daily loop
 
 Edit docs/code → `nlc` to see the delta and any broken refs → fix → `nlc check`.
+
+## Writing style for the docs you edit
+
+Workspace docs are read by humans. When you author or revise them (Direction A
+step 2, new sections, heading rewrites), follow `WRITING.md` in this directory
+in full; it is written for Chinese text. The rules that decide most sentences:
+
+- **Every sentence survives the deletion test.** Delete it: if no meaning is
+  lost, it was never needed. The same test applies to each adjective and
+  clause.
+- **Don't emphasize what nobody doubts.** Use 「不是 X 而是 Y」 only when X is
+  a misconception readers actually hold; otherwise just state Y.
+- **Metaphors and jargon must survive the follow-up question** "what does this
+  concretely mean". If a plain statement explains it as well, use the plain
+  statement.
+- **Delete what shouldn't exist instead of patching it.** Content that needs
+  extra caveats to stand is content to remove, patches included.
+- **Never substitute volume for argument.** 「彻底重塑」「炸裂」 carry no
+  information; land every strong claim on concrete facts.
+- **Common words and punctuation only**: everyday vocabulary; no dashes,
+  interpuncts, or 「XX：」 label-style fragments.
+
+Style never overrides reference syntax: a renamed heading must still slug-match
+every inbound `[[...]]` target, or the link turns into a *missing section*
+error.
 
 ## Reading the status report
 
