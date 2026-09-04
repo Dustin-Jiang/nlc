@@ -26,10 +26,15 @@ use snapshot::Snapshot;
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args()) {
         Ok(c) => c,
-        Err(msg) => {
-            eprintln!("nlc: {msg}");
+        Err(e) => {
+            eprintln!("nlc: {}", e.message);
             eprintln!();
-            eprint!("{}", cli::help_text());
+            let text = e
+                .sub
+                .as_deref()
+                .and_then(cli::subcommand_help)
+                .unwrap_or_else(cli::help_text);
+            eprint!("{text}");
             return ExitCode::from(2);
         }
     };
@@ -44,8 +49,13 @@ fn cwd() -> PathBuf {
 
 fn run(command: Command) -> i32 {
     match command {
-        Command::Help => {
-            print!("{}", cli::help_text());
+        Command::Help { sub } => {
+            print!(
+                "{}",
+                sub.as_deref()
+                    .and_then(cli::subcommand_help)
+                    .unwrap_or_else(cli::help_text)
+            );
             0
         }
 
