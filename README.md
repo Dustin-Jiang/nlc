@@ -119,6 +119,18 @@ nlc 追踪的是引用的位置，有两件事它不负责：
 | only support #L<line> | 对代码文件用了名字引用 | 改成 `#L<行>` |
 | circular dependency | 引用成环 | 断开环 |
 
+## 安装
+
+从 GitHub Releases 下载预编译二进制（Linux x86_64、macOS、Windows）：
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/Dustin-Jiang/nlc/main/install.sh)"
+```
+
+默认装到 `~/.local/bin`，用 `NLCS_INSTALL_DIR` 换目录。该平台没有预编译包时，脚本退回 `cargo install --git https://github.com/Dustin-Jiang/nlc nlc`；有 Rust 工具链也可以直接执行这条命令。
+
+本仓库里的 `install.sh` 是同一个脚本，clone 后直接 `./install.sh` 即可。
+
 ## 构建与开发
 
 需要 Rust 1.85 以上，代码用到 edition 2024 的 let-chains。

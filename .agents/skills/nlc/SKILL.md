@@ -11,8 +11,30 @@ lockstep: it reports which documentation changed, validates that every reference
 resolves, and lets you navigate from any doc to the exact code lines it describes
 (and back).
 
-> `nlc` treats its **cwd as the workspace root**. If `nlc` isn't on PATH, run it
-> from the source repo as `cargo run -q -- <args>` (build first with `cargo build`).
+> `nlc` treats its **cwd as the workspace root**.
+
+## Install
+
+Installing this skill only copies these Markdown files; the `nlc` binary is
+not included. At invoke time, resolve it in this order:
+
+1. `command -v nlc` — already on PATH, use it.
+2. Prebuilt binary from GitHub Releases (no Rust toolchain needed):
+
+   ```sh
+   sh -c "$(curl -fsSL https://raw.githubusercontent.com/Dustin-Jiang/nlc/main/install.sh)"
+   ```
+
+   Inside a checkout of this repo, run `./install.sh` instead. Default install
+   dir is `~/.local/bin` (override with `NLCS_INSTALL_DIR`); the script warns
+   if that dir is not on PATH.
+3. With a Rust toolchain:
+   `cargo install --git https://github.com/Dustin-Jiang/nlc nlc`.
+4. Last resort: clone the repo and use `target/release/nlc` after
+   `cargo build --release`, or `cargo run -q -- <args>` from the repo root.
+
+If a command fails with `command not found: nlc`, run step 2 instead of
+skipping the task.
 
 ## When to Use
 
